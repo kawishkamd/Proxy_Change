@@ -4,7 +4,6 @@
 validate_ip() {
   local ip="$1"
   if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-    # Check if each part of the IP is less than or equal to 255
     IFS='.' read -r -a octets <<< "$ip"
     for octet in "${octets[@]}"; do
       if ((octet > 255)); then
