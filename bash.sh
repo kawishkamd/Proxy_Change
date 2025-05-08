@@ -1,83 +1,96 @@
 #!/bin/bash
 
-# Function to validate IP address
+# Require root
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root." >&2
+  exit 1
+fi
+
+# Validate IP
 validate_ip() {
   local ip="$1"
-  if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-    IFS='.' read -r -a octets <<< "$ip"
-    for octet in "${octets[@]}"; do
-      if ((octet > 255)); then
-        return 1
-      fi
-    done
-    return 0
-  else
-    return 1
-  fi
+  local octet="(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+  [[ $ip =~ ^$octet\.$octet\.$octet\.$octet$ ]] || return 1
+  return 0
 }
 
-# Function to validate port
+# Validate Port
 validate_port() {
   local port="$1"
-  if [[ $port =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)); then
-    return 0
-  else
-    return 1
-  fi
+  [[ $port =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535))
 }
 
-# Function to add proxy settings
-add_proxy_settings() {
-  local ip_address="$1"
+# Remove existing proxy lines
+clear_proxy_settings() {
+  local env_file="/etc/environment"
+  [[ -f "$env_file" ]] || { echo "Error: $env_file does not exist" >&2; return 1; }
+
+  local backup_file="${env_file}.bak.$(date +%Y%m%d%H%M%S)"
+  cp "$env_file" "$backup_file" || { echo "Error: Failed to create backup" >&2; return 1; }
+
+  sed -i '/_proxy=/Id' "$env_file" || { echo "Error: Failed to remove proxy settings" >&2; return 1; }
+
+  echo "Proxy settings cleared. Backup: $backup_file"
+}
+
+# Set proxy
+set_proxy_settings() {
+  local ip="$1"
   local port="$2"
 
-  local proxy_settings="
-export http_proxy=\"http://${ip_address}:${port}/\"
-export https_proxy=\"http://${ip_address}:${port}/\"
-export ftp_proxy=\"ftp://${ip_address}:${port}/\"
-export rsync_proxy=\"rsync://${ip_address}:${port}/\"
-export no_proxy=\"localhost,127.0.0.1,192.168.1.1,::1,*.local\"
-export HTTP_PROXY=\"http://${ip_address}:${port}/\"
-export HTTPS_PROXY=\"http://${ip_address}:${port}/\"
-export FTP_PROXY=\"ftp://${ip_address}:${port}/\"
-export RSYNC_PROXY=\"rsync://${ip_address}:${port}/\"
-export NO_PROXY=\"localhost,127.0.0.1,192.168.1.1,::1,*.local\"
-"
+  if ! clear_proxy_settings; then
+    echo "Error: Could not clear existing proxy settings." >&2
+    return 1
+  fi
 
-  # Backup existing /etc/environment
-  sudo cp /etc/environment /etc/environment.bak
+  local temp_file
+  temp_file=$(mktemp) || { echo "Error: Cannot create temp file." >&2; return 1; }
+  trap 'rm -f "$temp_file"' EXIT
 
-  # Append proxy settings to /etc/environment
-  echo "$proxy_settings" | sudo tee -a /etc/environment
+  cat <<EOF > "$temp_file"
+export http_proxy="http://${ip}:${port}/"
+export https_proxy="http://${ip}:${port}/"
+export ftp_proxy="ftp://${ip}:${port}/"
+export rsync_proxy="rsync://${ip}:${port}/"
+export no_proxy="localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,::1,*.local"
+export HTTP_PROXY="http://${ip}:${port}/"
+export HTTPS_PROXY="http://${ip}:${port}/"
+export FTP_PROXY="ftp://${ip}:${port}/"
+export RSYNC_PROXY="rsync://${ip}:${port}/"
+export NO_PROXY="localhost,127.0.0.1,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,::1,*.local"
+EOF
 
-  echo "Proxy settings applied successfully!"
+  tee -a /etc/environment < "$temp_file" > /dev/null || {
+    echo "Error: Failed to write proxy settings" >&2
+    return 1
+  }
+
+  echo "Proxy set to ${ip}:${port}"
 }
 
-# Main script
+# Menu
 clear
-echo "Welcome to the Proxy Setup Script"
+echo "=== Proxy Configuration ==="
+echo "1. Set Proxy"
+echo "2. Unset Proxy"
+read -rp "Choose [1/2]: " choice
 
-# Prompt user for IP address
-while true; do
-  read -p "Enter the IP address of the proxy server: " ip_address
-  if validate_ip "$ip_address"; then
-    break
-  else
-    echo "Invalid IP address. Please enter a valid IP address in the format xxx.xxx.xxx.xxx where xxx is between 0 and 255."
-  fi
-done
+if [[ "$choice" == "1" ]]; then
+  while true; do
+    read -rp "Enter proxy IP: " ip
+    validate_ip "$ip" && break || echo "Invalid IP! Must be in format xxx.xxx.xxx.xxx" >&2
+  done
+  while true; do
+    read -rp "Enter proxy port: " port
+    validate_port "$port" && break || echo "Invalid port! Must be between 1 and 65535" >&2
+  done
+  set_proxy_settings "$ip" "$port"
+elif [[ "$choice" == "2" ]]; then
+  clear_proxy_settings
+  echo "Proxy unset."
+else
+  echo "Invalid choice." >&2
+  exit 1
+fi
 
-# Prompt user for port
-while true; do
-  read -p "Enter the port number of the proxy server: " port
-  if validate_port "$port"; then
-    break
-  else
-    echo "Invalid port number. Please enter a valid port number between 1 and 65535."
-  fi
-done
-
-# Add proxy settings
-add_proxy_settings "$ip_address" "$port"
-
-echo "Please reboot your system or log out and log back in for changes to take effect."
+echo "Note: Reboot or re-login to apply changes."
