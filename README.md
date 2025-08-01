@@ -29,4 +29,3 @@ Open a terminal and run the following command to make the script executable:
 ```sh
 chmod +x set_proxy.sh
 ```
-![Linux Proxy Setup ](proxy_thumbnail.png)
